@@ -1,13 +1,29 @@
 import asyncio
+import os
 import random
+from pathlib import Path
+
 import discord
 from discord import app_commands
-from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent
 NGON_FILE = BASE_DIR / "ngon_da_them_hash.txt"
 
-def load_ngon():
+OWNER_ID = 1417497667449126952
+
+ADMIN_IDS = {
+    1417497667449126952,
+    1330425526363623494,
+}
+
+MIN_INTERVAL = 0.1
+
+loop_tasks: dict[int, list[asyncio.Task]] = {}
+ngon_tasks: dict[int, list[asyncio.Task]] = {}
+ngon_queues: dict[int, list[str]] = {}
+
+
+def load_ngon() -> list[str]:
     try:
         if not NGON_FILE.exists():
             print(f"[NGON] KHÔNG TÌM THẤY: {NGON_FILE}")
@@ -23,31 +39,6 @@ def load_ngon():
         print(f"[NGON] Lỗi: {e}")
         return []
 
-import os
-
-TOKEN = os.getenv("DISCORD_TOKEN")
-
-ADMIN_IDS = {
-    1417497667449126952,
-    1330425526363623494,
-}
-
-loop_tasks: dict[int, list[asyncio.Task]] = {}
-ngon_tasks: dict[int, list[asyncio.Task]] = {}
-
-ngon_indexes: dict[int, int] = {}
-ngon_queues: dict[int, list[str]] = {}
-MIN_INTERVAL = 0.1
-
-intents = discord.Intents.default()
-client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(
-    client,
-    allowed_installs=app_commands.AppInstallationType(guild=True, user=True),
-    allowed_contexts=app_commands.AppCommandContext(
-        guild=True, dm_channel=True, private_channel=True
-    ),
-)
 
 def get_next_ngon(channel_id: int) -> str | None:
     queue = ngon_queues.get(channel_id)
@@ -63,67 +54,79 @@ def get_next_ngon(channel_id: int) -> str | None:
 
     return queue.pop()
 
-OWNER_ID = 1417497667449126952  # ID của boss man
 
 async def admin_only(interaction: discord.Interaction) -> bool:
-    # Boss luôn có quyền
     if interaction.user.id == OWNER_ID:
         return True
 
-    # Những người đã được /add cấp quyền
     if interaction.user.id in ADMIN_IDS:
         return True
+
+    if not interaction.response.is_done():
+        await interaction.response.send_message(
+            "❌ Bạn không có quyền dùng lệnh này."
+        )
+    return False
+
+
+intents = discord.Intents.default()
+client = discord.Client(intents=intents)
+
+tree = app_commands.CommandTree(
+    client,
+    allowed_installs=app_commands.AppInstallationType(
+        guild=True,
+        user=True,
+    ),
+    allowed_contexts=app_commands.AppCommandContext(
+        guild=True,
+        dm_channel=True,
+        private_channel=True,
+    ),
+)
+
+
 @client.event
 async def on_ready():
-    synced = await tree.sync()
+    try:
+        synced = await tree.sync()
+        print("=" * 50)
+        print(f"🤖 Bot: {client.user}")
+        print(f"🆔 ID: {client.user.id}")
+        print(f"🌍 Đang ở {len(client.guilds)} server")
+        print(f"📜 Global slash commands: {len(synced)}")
+        print("=" * 50)
+    except Exception:
+        import traceback
+        print("[SYNC ERROR]")
+        traceback.print_exc()
 
-    print("=" * 45)
-    print(f"🤖 Bot: {client.user}")
-    print(f"🆔 ID: {client.user.id}")
-    print(f"🌍 Đã tham gia {len(client.guilds)} server")
-    print("-" * 45)
 
-    for i, guild in enumerate(client.guilds, start=1):
-        print(f"{i}. {guild.name}")
-        print(f"   ID: {guild.id}")
-        print(f"   Thành viên: {guild.member_count}")
-        print()
-
-    print("=" * 45)
 @tree.command(name="add", description="Thêm người dùng làm admin")
 @app_commands.describe(user="Người dùng muốn cấp quyền")
 async def add(interaction: discord.Interaction, user: discord.User):
-    # Chỉ OWNER mới được cấp quyền
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message(
-            "❌ Chỉ boss mới cấp quyền.",
-            ephemeral=True,
+            "❌ Chỉ boss mới cấp quyền."
         )
         return
 
     if user.id in ADMIN_IDS:
         await interaction.response.send_message(
-            f"⚠️ {user.mention} đã là admin.",
-            ephemeral=True,
+            f"⚠️ {user.mention} đã là admin."
         )
         return
 
     ADMIN_IDS.add(user.id)
 
     await interaction.response.send_message(
-        f"✅ Đã thêm {user.mention} làm admin.",
-        ephemeral=True,
+        f"✅ Đã thêm {user.mention} làm admin."
     )
+
+
 @tree.command(name="listadmin", description="Xem danh sách admin bot")
 async def listadmin(interaction: discord.Interaction):
     if not await admin_only(interaction):
-        return
-
-    if not ADMIN_IDS:
-        await interaction.response.send_message(
-            "📋 Hiện không có admin nào.",
-            ephemeral=True,
-        )
         return
 
     lines = []
@@ -134,9 +137,11 @@ async def listadmin(interaction: discord.Interaction):
         else:
             lines.append(f"• User ID: {user_id}")
 
+    if not lines:
+        lines.append("• Chưa có admin nào.")
+
     await interaction.response.send_message(
-        "👑 **Danh sách Admin**\n\n" + "\n".join(lines),
-        ephemeral=True,
+        "👑 **Danh sách Admin**\n\n" + "\n".join(lines)
     )
 
 
@@ -145,123 +150,109 @@ async def listadmin(interaction: discord.Interaction):
 async def removeadmin(interaction: discord.Interaction, user: discord.User):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message(
-            "❌ Chỉ boss mới thu quyền.",
-            ephemeral=True,
+            "❌ Chỉ boss mới thu quyền."
         )
         return
 
     if user.id == interaction.user.id:
         await interaction.response.send_message(
-            "❌ Không thể tự xóa quyền của chính mình.",
-            ephemeral=True,
+            "❌ Không thể tự xóa quyền của chính mình."
         )
         return
 
     if user.id not in ADMIN_IDS:
         await interaction.response.send_message(
-            f"⚠️ {user.mention} không phải admin.",
-            ephemeral=True,
+            f"⚠️ {user.mention} không phải admin."
         )
         return
 
     ADMIN_IDS.remove(user.id)
 
     await interaction.response.send_message(
-        f"✅ Đã xóa quyền admin của {user.mention}.",
-        ephemeral=True,
+        f"✅ Đã xóa quyền admin của {user.mention}."
     )
-    ADMIN_IDS.remove(user.id)
 
-    await interaction.response.send_message(
-        f"✅ Đã xóa quyền admin của {user.mention}.",
-        ephemeral=True
-    )
-    if user.id == interaction.user.id:
-        await interaction.response.send_message(
-            "❌ Không thể tự xóa quyền của chính mình.",
-            ephemeral=True,
-        )
-        return
 
-    if user.id not in ADMIN_IDS:
-        await interaction.response.send_message(
-            f"⚠️ {user.mention} không phải admin.",
-            ephemeral=True,
-        )
-        return
-
-    ADMIN_IDS.remove(user.id)
-
-    await interaction.response.send_message(
-        f"✅ Đã xóa quyền admin của {user.mention}.",
-        ephemeral=True,
-    )
 @tree.command(name="servers", description="Xem các server bot đang ở")
 async def servers(interaction: discord.Interaction):
     if interaction.user.id != OWNER_ID:
         await interaction.response.send_message(
-            "❌ Chỉ boss mới xem được.",
-            ephemeral=True
+            "❌ Chỉ boss mới xem được."
         )
         return
 
     if not client.guilds:
         await interaction.response.send_message(
-            "Bot chưa ở server nào.",
-            ephemeral=True
+            "ℹ️ User Install không cung cấp danh sách server cho bot theo cách này."
         )
         return
 
-    lines = []
-    for g in client.guilds:
-        lines.append(
-            f"**{g.name}**\nID: `{g.id}` | Thành viên: {g.member_count}"
-        )
+    lines = [
+        f"**{g.name}**\nID: `{g.id}` | Thành viên: {g.member_count}"
+        for g in client.guilds
+    ]
 
     await interaction.response.send_message(
-        "## 🌍 Danh sách server\n\n" + "\n\n".join(lines),
-        ephemeral=True
+        "## 🌍 Danh sách server\n\n" + "\n\n".join(lines)
     )
+
+
 @tree.command(name="startsay", description="Bật gửi tin định kỳ")
 @app_commands.describe(
     message="Nội dung muốn gửi",
     seconds="Khoảng cách giữa các lần gửi (tối thiểu 0.1)",
-    user="Người dùng muốn tag (không bắt buộc)"
+    user="Người dùng muốn tag (không bắt buộc)",
 )
 async def startsay(
     interaction: discord.Interaction,
     message: str,
     seconds: float,
-    user: discord.User | None = None
+    user: discord.User | None = None,
 ):
     if not await admin_only(interaction):
         return
+
     if seconds < MIN_INTERVAL:
         seconds = MIN_INTERVAL
+
     channel = interaction.channel
     if channel is None:
-        await interaction.response.send_message("❌ Không xác định được channel.", ephemeral=True)
+        await interaction.response.send_message(
+            "❌ Không xác định được channel."
+        )
         return
+
     channel_id = interaction.channel_id
+
+    await interaction.response.send_message(
+        f"✅ Đã bật gửi tin mỗi {seconds:g} giây."
+        + (f" Tag {user.mention}." if user else "")
+    )
 
     async def sender():
         while True:
             try:
                 content = f"{message} {user.mention}" if user else message
-                await channel.send(content, allowed_mentions=discord.AllowedMentions(users=True))
-                await asyncio.sleep(seconds)
-            except asyncio.CancelledError:
-                raise
-            except discord.HTTPException as e:
-                print(f"[DISCORD ERROR] {e}")
+                await channel.send(
+                    content,
+                    allowed_mentions=discord.AllowedMentions(users=True),
+                )
                 await asyncio.sleep(seconds)
 
-    loop_tasks.setdefault(channel_id, []).append(asyncio.create_task(sender()))
-    tag_text = f" và tag {user.mention}" if user else ""
-    await interaction.response.send_message(
-        f"✅ Đã bật gửi tin mỗi {seconds:g} giây{tag_text}.",
-        ephemeral=True,
-    )
+            except asyncio.CancelledError:
+                raise
+
+            except discord.HTTPException as e:
+                print(f"[DISCORD ERROR] startsay: {e}")
+                await asyncio.sleep(max(seconds, MIN_INTERVAL))
+
+            except Exception as e:
+                print(f"[ERROR] startsay: {e}")
+                await asyncio.sleep(max(seconds, MIN_INTERVAL))
+
+    task = asyncio.create_task(sender())
+    loop_tasks.setdefault(channel_id, []).append(task)
+
 
 @tree.command(name="stopsay", description="Tắt tất cả gửi tin định kỳ trong kênh")
 async def stopsay(interaction: discord.Interaction):
@@ -272,27 +263,27 @@ async def stopsay(interaction: discord.Interaction):
     tasks_list = loop_tasks.pop(channel_id, None)
 
     if tasks_list:
-        for t in tasks_list:
-            t.cancel()
+        for task in tasks_list:
+            task.cancel()
+
         await interaction.response.send_message(
-            "✅ Đã tắt tất cả loop trong channel này.",
-            ephemeral=True,
+            "✅ Đã tắt tất cả loop trong channel này."
         )
     else:
         await interaction.response.send_message(
-            "ℹ️ Channel này không có loop nào đang chạy.",
-            ephemeral=True,
+            "ℹ️ Channel này không có loop nào đang chạy."
         )
+
 
 @tree.command(name="startngon", description="Đọc lần lượt các dòng từ file")
 @app_commands.describe(
     seconds="Khoảng cách giữa các lần gửi (tối thiểu 0.1)",
-    user="Người dùng muốn tag (không bắt buộc)"
+    user="Người dùng muốn tag (không bắt buộc)",
 )
 async def startngon(
     interaction: discord.Interaction,
     seconds: float = MIN_INTERVAL,
-    user: discord.User | None = None
+    user: discord.User | None = None,
 ):
     if not await admin_only(interaction):
         return
@@ -303,8 +294,7 @@ async def startngon(
     channel = interaction.channel
     if channel is None:
         await interaction.response.send_message(
-            "❌ Không xác định được channel.",
-            ephemeral=True
+            "❌ Không xác định được channel."
         )
         return
 
@@ -312,10 +302,14 @@ async def startngon(
 
     if not load_ngon():
         await interaction.response.send_message(
-            "❌ File không tồn tại hoặc không có dòng nào.",
-            ephemeral=True
+            "❌ File không tồn tại hoặc không có dòng nào."
         )
         return
+
+    await interaction.response.send_message(
+        f"✅ Đã bắt đầu đọc file mỗi {seconds:g} giây."
+        + (f" Tag {user.mention}." if user else "")
+    )
 
     async def ngon_sender():
         while True:
@@ -331,23 +325,23 @@ async def startngon(
 
                 await channel.send(
                     content,
-                    allowed_mentions=discord.AllowedMentions(users=True)
+                    allowed_mentions=discord.AllowedMentions(users=True),
                 )
                 await asyncio.sleep(seconds)
 
             except asyncio.CancelledError:
                 raise
+
             except discord.HTTPException as e:
                 print(f"[NGON DISCORD ERROR] {e}")
                 await asyncio.sleep(max(seconds, MIN_INTERVAL))
 
-    ngon_tasks.setdefault(channel_id, []).append(asyncio.create_task(ngon_sender()))
+            except Exception as e:
+                print(f"[ERROR] startngon: {e}")
+                await asyncio.sleep(max(seconds, MIN_INTERVAL))
 
-    tag_text = f" và tag {user.mention}" if user else ""
-    await interaction.response.send_message(
-        f"✅ Đã bắt đầu đọc file mỗi {seconds:g} giây{tag_text}.",
-        ephemeral=True,
-    )
+    task = asyncio.create_task(ngon_sender())
+    ngon_tasks.setdefault(channel_id, []).append(task)
 
 
 @tree.command(name="stopngon", description="Dừng tất cả vòng đọc file trong kênh")
@@ -359,32 +353,36 @@ async def stopngon(interaction: discord.Interaction):
     tasks_list = ngon_tasks.pop(channel_id, None)
 
     if tasks_list:
-        for t in tasks_list:
-            t.cancel()
+        for task in tasks_list:
+            task.cancel()
+
         await interaction.response.send_message(
-            "✅ Đã dừng tất cả vòng đọc file trong channel này.",
-            ephemeral=True,
+            "✅ Đã dừng tất cả vòng đọc file trong channel này."
         )
     else:
         await interaction.response.send_message(
-            "ℹ️ Channel này không có vòng đọc file nào.",
-            ephemeral=True,
+            "ℹ️ Channel này không có vòng đọc file nào."
         )
 
-
-if not TOKEN:
-    raise RuntimeError("Chưa đặt biến môi trường DISCORD_TOKEN.")
-
-print("=== TEST FILE NGON ===")
-print("Đường dẫn:", NGON_FILE)
-print("Tồn tại:", NGON_FILE.exists())
-data = load_ngon()
-print("Số dòng:", len(data))
-print("======================")
 
 @client.event
 async def on_error(event, *args, **kwargs):
     import traceback
-    print(f"Lỗi ở event: {event}")
+    print(f"[EVENT ERROR] {event}")
     traceback.print_exc()
+
+
+TOKEN = os.getenv("DISCORD_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError(
+        "Chưa đặt biến môi trường DISCORD_TOKEN trên Render."
+    )
+
+print("=== TEST FILE NGON ===")
+print("Đường dẫn:", NGON_FILE)
+print("Tồn tại:", NGON_FILE.exists())
+print("Số dòng:", len(load_ngon()))
+print("======================")
+
 client.run(TOKEN)
