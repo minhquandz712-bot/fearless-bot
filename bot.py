@@ -27,18 +27,27 @@ import os
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
+ADMIN_IDS = {
+    1417497667449126952,
+    1330425526363623494,
+}
+
 loop_tasks: dict[int, list[asyncio.Task]] = {}
 ngon_tasks: dict[int, list[asyncio.Task]] = {}
 
 ngon_indexes: dict[int, int] = {}
 ngon_queues: dict[int, list[str]] = {}
 MIN_INTERVAL = 0.1
-TREO_MIN_INTERVAL = 1.0
-treo_tasks: dict[int, list[asyncio.Task]] = {}
 
 intents = discord.Intents.default()
 client = discord.Client(intents=intents)
-tree = app_commands.CommandTree(client)
+tree = app_commands.CommandTree(
+    client,
+    allowed_installs=app_commands.AppInstallationType(guild=True, user=True),
+    allowed_contexts=app_commands.AppCommandContext(
+        guild=True, dm_channel=True, private_channel=True
+    ),
+)
 
 def get_next_ngon(channel_id: int) -> str | None:
     queue = ngon_queues.get(channel_id)
@@ -55,7 +64,6 @@ def get_next_ngon(channel_id: int) -> str | None:
     return queue.pop()
 
 OWNER_ID = 1417497667449126952  # ID của boss man
-ADMIN_IDS = {OWNER_ID}
 
 async def admin_only(interaction: discord.Interaction) -> bool:
     # Boss luôn có quyền
@@ -65,21 +73,23 @@ async def admin_only(interaction: discord.Interaction) -> bool:
     # Những người đã được /add cấp quyền
     if interaction.user.id in ADMIN_IDS:
         return True
-
 @client.event
 async def on_ready():
-    synced = await tree.sync()   # Sync cho mọi server bot tham gia
+    synced = await tree.sync()
 
     print("=" * 45)
     print(f"🤖 Bot: {client.user}")
     print(f"🆔 ID: {client.user.id}")
     print(f"🌍 Đã tham gia {len(client.guilds)} server")
-    print(f"⚡ Đã sync {len(synced)} lệnh toàn cục")
-    print("=" * 45)
+    print("-" * 45)
 
     for i, guild in enumerate(client.guilds, start=1):
-        print(f"{i}. {guild.name} ({guild.id})")
+        print(f"{i}. {guild.name}")
+        print(f"   ID: {guild.id}")
+        print(f"   Thành viên: {guild.member_count}")
+        print()
 
+    print("=" * 45)
 @tree.command(name="add", description="Thêm người dùng làm admin")
 @app_commands.describe(user="Người dùng muốn cấp quyền")
 async def add(interaction: discord.Interaction, user: discord.User):
@@ -377,38 +387,4 @@ async def on_error(event, *args, **kwargs):
     import traceback
     print(f"Lỗi ở event: {event}")
     traceback.print_exc()
-
-# =========================
-# /starttreo - Tự động gửi 9 dòng
-# =========================
-
-@tree.command(name="starttreo", description="Tự động gửi 9 dòng với nội dung và link tùy chỉnh.")
-@app_commands.describe(noidung="Nội dung muốn hiển thị", bio="Link muốn gắn", delay="Khoảng cách gửi (giây)")
-async def starttreo(interaction: discord.Interaction, noidung: str, bio: str, delay: float):
-    if delay < TREO_MIN_INTERVAL: delay = TREO_MIN_INTERVAL
-    channel = interaction.channel
-    if channel is None:
-        await interaction.response.send_message("❌ Không xác định được channel.", ephemeral=True); return
-    noidung=noidung.strip(); bio=bio.strip()
-    if not bio.startswith(("http://","https://")): bio="https://"+bio
-    message="\n".join([f"# > [ {noidung}](<{bio}>)"]*9)
-    async def treo_loop():
-        while True:
-            try:
-                await channel.send(message)
-                await asyncio.sleep(delay)
-            except asyncio.CancelledError: raise
-            except discord.HTTPException: await asyncio.sleep(delay)
-    treo_tasks.setdefault(interaction.channel_id,[]).append(asyncio.create_task(treo_loop()))
-    await interaction.response.send_message(f"✅ Đã bật gửi mỗi {delay:g} giây.", ephemeral=True)
-
-@tree.command(name="stoptreo", description="Dừng toàn bộ vòng gửi trong kênh.")
-async def stoptreo(interaction: discord.Interaction):
-    tasks=treo_tasks.pop(interaction.channel_id,None)
-    if tasks:
-        [t.cancel() for t in tasks]
-        await interaction.response.send_message("✅ Đã dừng.", ephemeral=True)
-    else:
-        await interaction.response.send_message("ℹ️ Không có vòng nào đang chạy.", ephemeral=True)
-
 client.run(TOKEN)
